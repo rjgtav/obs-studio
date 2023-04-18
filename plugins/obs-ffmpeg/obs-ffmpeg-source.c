@@ -58,6 +58,7 @@ struct ffmpeg_source {
 	bool is_clear_on_media_end;
 	bool restart_on_activate;
 	bool close_when_inactive;
+	bool stop_when_inactive;
 	bool seekable;
 
 	pthread_t reconnect_thread;
@@ -244,6 +245,7 @@ static void dump_source_info(struct ffmpeg_source *s, const char *input,
 		"\tis_clear_on_media_end:   %s\n"
 		"\trestart_on_activate:     %s\n"
 		"\tclose_when_inactive:     %s\n"
+		"\tpause_when_inactive:     %s\n"
 		"\tffmpeg_options:          %s",
 		input ? input : "(null)",
 		input_format ? input_format : "(null)", s->speed_percent,
@@ -251,7 +253,9 @@ static void dump_source_info(struct ffmpeg_source *s, const char *input,
 		s->is_hw_decoding ? "yes" : "no",
 		s->is_clear_on_media_end ? "yes" : "no",
 		s->restart_on_activate ? "yes" : "no",
-		s->close_when_inactive ? "yes" : "no", s->ffmpeg_options);
+		s->close_when_inactive ? "yes" : "no",
+		s->stop_when_inactive ? "yes" : "no",
+		s->ffmpeg_options);
 }
 
 static void get_frame(void *opaque, struct obs_source_frame *f)
@@ -355,6 +359,10 @@ static void *ffmpeg_source_reconnect(void *data)
 		goto finish;
 
 	bool active = obs_source_active(s->source);
+
+	if (!active && s->stop_when_inactive)
+		goto finish;
+
 	if (!s->close_when_inactive || active)
 		ffmpeg_source_open(s);
 
@@ -447,6 +455,8 @@ static void ffmpeg_source_update(void *data, obs_data_t *settings)
 
 	s->close_when_inactive =
 		obs_data_get_bool(settings, "close_when_inactive");
+	s->stop_when_inactive =
+		obs_data_get_bool(settings, "stop_when_inactive");
 
 	s->input = input ? bstrdup(input) : NULL;
 	s->input_format = input_format ? bstrdup(input_format) : NULL;
@@ -666,7 +676,9 @@ static void ffmpeg_source_activate(void *data)
 {
 	struct ffmpeg_source *s = data;
 
-	if (s->restart_on_activate)
+	if (s->stop_when_inactive)
+		ffmpeg_source_start(s);
+	else if (s->restart_on_activate)
 		obs_source_media_restart(s->source);
 }
 
@@ -674,7 +686,7 @@ static void ffmpeg_source_deactivate(void *data)
 {
 	struct ffmpeg_source *s = data;
 
-	if (s->restart_on_activate) {
+	if (s->restart_on_activate || s->stop_when_inactive) {
 		if (s->media_valid) {
 			mp_media_stop(&s->media);
 
